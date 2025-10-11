@@ -3,6 +3,12 @@ ob_start();
 
 header('X-Frame-Options: SAMEORIGIN');
 
+function logActivity($message) {
+    $logFile = 'activity.log';
+    $timestamp = date('Y-m-d H:i:s');
+    file_put_contents($logFile, "[$timestamp] $message\n", FILE_APPEND);
+}
+
 function isAllowedFile($file, $allowedExtensions)
 {
     $extension = pathinfo($file, PATHINFO_EXTENSION);
@@ -24,21 +30,25 @@ if (isset($_GET['action'])) {
 
     if ($action === 'read' && is_file($file)) {
         if (!isAllowedFile($file, $allowedExtensions)) {
+            logActivity("Read File Attempted: $file - Not Allowed");
             echo "This file type is not allowed to be edited.";
             exit;
         }
         echo file_get_contents($file);
+        logActivity("Read File: $file");
         exit;
     }
 
     if ($action === 'save' && is_file($file)) {
         if (!isAllowedFile($file, $allowedExtensions)) {
             echo "This file type is not allowed to be edited.";
+            logActivity("Save File Attempted: $file - Not Allowed");
             exit;
         }
         $data = json_decode(file_get_contents('php://input'), true);
         file_put_contents($file, $data['content']);
         echo "File saved successfully!";
+        logActivity("Saved File: $file");
         exit;
     }
 
@@ -47,13 +57,26 @@ if (isset($_GET['action'])) {
         $newPath = dirname($file) . '/' . $newName;
         if (rename($file, $newPath)) {
             echo "File renamed successfully!";
+            logActivity("Renamed File: $file to $newPath");
         } else {
             echo "Failed to rename file.";
+            logActivity("Failed to Rename File: $file to $newPath");
         }
         exit;
     }
 
     if ($action === 'listFiles') {
+        $currentDir = isset($_GET['dir']) ? $_GET['dir'] : './';
+
+        if (is_dir($currentDir)) {
+            $files = array_diff(scandir($currentDir), array('.', '..'));
+            logActivity("Listed Files in Directory: $currentDir");
+        } else {
+            echo json_encode(['error' => 'Invalid directory']);
+            logActivity("List Files Attempted: $currentDir - Invalid Directory");
+            exit;
+        }
+
         $fileList = [];
         foreach ($files as $file) {
             $filePath = $currentDir . '/' . $file;
@@ -66,7 +89,75 @@ if (isset($_GET['action'])) {
         }
         echo json_encode($fileList);
         exit;
-    }    
+    }
+
+    if ($action === 'delete') {
+        if (is_file($file)) {
+            if (unlink($file)) {
+                echo "File deleted successfully!";
+                logActivity("Deleted File: $file");
+            } else {
+                echo "Failed to delete file.";
+                logActivity("Failed to Delete File: $file");
+            }
+        } elseif (is_dir($file)) {
+            function deleteFolder($folder) {
+                foreach (scandir($folder) as $item) {
+                    if ($item === '.' || $item === '..') continue;
+                    $itemPath = $folder . '/' . $item;
+                    if (is_dir($itemPath)) {
+                        deleteFolder($itemPath);
+                    } else {
+                        unlink($itemPath);
+                    }
+                }
+                return rmdir($folder);
+            }
+
+            if (deleteFolder($file)) {
+                echo "Folder deleted successfully!";
+                logActivity("Deleted Folder: $file");
+            } else {
+                echo "Failed to delete folder.";
+                logActivity("Failed to Delete Folder: $file");
+            }
+        } else {
+            echo "Invalid file or folder.";
+            logActivity("Delete Attempted: $file - Invalid File/Folder");
+        }
+        exit;
+    }
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['uploadedFiles'])) {
+    $uploadDir = isset($_GET['dir']) ? $_GET['dir'] : './';
+    $uploadedFiles = $_FILES['uploadedFiles'];
+
+    $successCount = 0;
+    $errorCount = 0;
+
+    foreach ($uploadedFiles['name'] as $key => $fileName) {
+        $fileTmpName = $uploadedFiles['tmp_name'][$key];
+        $filePath = $uploadDir . '/' . basename($fileName);
+
+        if (move_uploaded_file($fileTmpName, $filePath)) {
+            $successCount++;
+            logActivity("Uploaded File: $filePath");
+        } else {
+            $errorCount++;
+            logActivity("Failed to Upload File: $filePath");
+        }
+    }
+
+    if ($successCount > 0) {
+        echo "<script>alert('$successCount file(s) uploaded successfully!'); window.location.href = '?dir=" . urlencode($uploadDir) . "';</script>";
+        logActivity("Upload Summary: $successCount Success, $errorCount Failed in $uploadDir");
+    }
+
+    if ($errorCount > 0) {
+        echo "<script>alert('$errorCount file(s) failed to upload.');</script>";
+        logActivity("Upload Summary: $successCount Success, $errorCount Failed in $uploadDir");
+    }
 }
 ?>
 
@@ -98,7 +189,6 @@ if (isset($_GET['action'])) {
     <meta name="twitter:description" content="file manager of htdocs or /var/www/html" />
     <meta name="twitter:image" content=" " />
 
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
 
     <title>File Manager Htdocs</title>
@@ -599,6 +689,13 @@ if (isset($_GET['action'])) {
         updateTime();
         setInterval(updateTime, 1000);
 
+        function updatePathColor() {
+            const pathColorElement = document.querySelector('.path-color');
+            if (pathColorElement) {
+                const isLightMode = document.body.classList.contains('light-mode');
+                pathColorElement.style.color = isLightMode ? 'red' : 'yellow';
+            }
+        }
 
         window.onload = function () {
             const savedTheme = localStorage.getItem('theme');
@@ -694,7 +791,7 @@ function saveFile() {
 }
 
 function renameFile() {
-    const newName = prompt('Enter new file name:');
+    const newName = prompt('Enter new file name (with Extension):');
     if (!newName) return;
 
     fetch(`?action=rename&file=${encodeURIComponent(currentFilePath)}&newName=${encodeURIComponent(newName)}`)
@@ -728,9 +825,23 @@ function closeEditor() {
     document.getElementById('textEditorModal').style.display = 'none';
 }
 
+function deleteFile(filePath) {
+    if (confirm('Are you sure you want to delete this file/folder?')) {
+        fetch(`?action=delete&file=${encodeURIComponent(filePath)}`)
+            .then(response => response.text())
+            .then(result => {
+                alert(result);
+                location.reload();
+            })
+            .catch(error => alert('Failed to delete file/folder: ' + error));
+    }
+}
+
 document.addEventListener("DOMContentLoaded", function () {
     const fileTableBody = document.querySelector("#fileTable tbody");
     const loadingIndicator = document.getElementById("loading");
+
+    const currentDir = window.location.search ? new URLSearchParams(window.location.search).get('dir') : './';
 
     fetch(`?action=listFiles&dir=${encodeURIComponent(currentDir)}`)
         .then(response => response.json())
@@ -738,19 +849,38 @@ document.addEventListener("DOMContentLoaded", function () {
             loadingIndicator.style.display = "none";
             files.forEach(file => {
                 const row = document.createElement("tr");
-                row.innerHTML = `
-                    <td>${file.name}</td>
-                    <td>${file.date}</td>
-                    <td>${file.type}</td>
-                    <td>${file.size}</td>
-                `;
-                fileTableBody.appendChild(row);
+                // row.innerHTML = `
+                //     <td>${file.name}</td>
+                //     <td>${file.date}</td>
+                //     <td>${file.type}</td>
+                //     <td>${file.size}</td>
+                // `;
+                console.log(fileTableBody.appendChild(row));
             });
         })
         .catch(error => console.error("Failed to load files:", error));
 });
 
         document.addEventListener("DOMContentLoaded", function () {
+
+            document.querySelectorAll(".bookmark-btn").forEach(button => {
+        button.addEventListener("click", (event) => {
+            event.stopPropagation(); // Mencegah event click pada elemen induk
+            const folderPath = button.getAttribute("data-path");
+            bookmarkFolder(folderPath);
+        });
+    });
+
+    // Event listener untuk tombol Delete
+    document.querySelectorAll(".delete-btn").forEach(button => {
+        button.addEventListener("click", (event) => {
+            event.stopPropagation(); // Mencegah event click pada elemen induk
+            const filePath = button.getAttribute("data-path");
+            deleteFile(filePath);
+        });
+    });
+
+
             document.getElementById("loading").style.display = "none";
             document.querySelector(".container").style.display = "block";
 
@@ -781,7 +911,11 @@ document.addEventListener("DOMContentLoaded", function () {
         <h1>Loading...</h1>
     </div>
     <div class="container">
-        <h1>File Explorer</h1>
+        <h2 style="margin-bottom: 20px; text-align: center;">
+            <a href="index.php" style="text-decoration: none;">
+                <span class="path-color">File Manager (htdocs)</span>
+            </a>
+        </h2>
         <header>
             <div class="info">
                 <p id="datetime"></p>
@@ -794,6 +928,19 @@ document.addEventListener("DOMContentLoaded", function () {
 
         <div class="search-container">
             <input type="text" id="searchInput" onkeyup="searchFiles()" placeholder="Search for files...">
+        </div>
+        <br />
+        <div id="dropZone" style="border: 2px dashed #007bff; padding: 20px; text-align: center; color: #007bff; margin-bottom: 20px;">
+            Drag and drop files here to upload
+            <form id="uploadForm" method="POST" enctype="multipart/form-data">
+                <input type="file" id="fileInput" name="uploadedFiles[]" multiple style="display: none;">
+                <button type="button" id="browseButton" style="margin-top: 10px; background-color: #007bff; color: #fff; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">Browse Files</button>
+                <button type="submit" style="margin-top: 10px; background-color: #28a745; color: #fff; padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer;">Upload</button>
+            </form>
+        </div>
+        <div class="bookmarks">
+            <h3>Bookmarks</h3>
+            <ul id="bookmarkList"></ul>
         </div>
         <table class="file-table" id="fileTable">
             <thead>
@@ -836,9 +983,24 @@ document.addEventListener("DOMContentLoaded", function () {
                 }
 
                 $currentDir = isset($_GET['dir']) ? $_GET['dir'] : './';
+
+                // Periksa apakah $currentDir adalah direktori
+                if (is_dir($currentDir)) {
+                    $files = array_diff(scandir($currentDir), array('.', '..'));
+                } elseif (is_file($currentDir)) {
+                    // Jika $currentDir adalah file, buka file tersebut
+                    header('Content-Type: ' . mime_content_type($currentDir));
+                    header('Content-Disposition: inline; filename="' . basename($currentDir) . '"');
+                    readfile($currentDir);
+                    exit;
+                } else {
+                    // Jika $currentDir tidak valid, tampilkan pesan error
+                    die("Invalid directory or file.");
+                }
+                
                 $files = array_diff(scandir($currentDir), array('.', '..'));
 
-                $filesPerPage = 10;
+                $filesPerPage = 15; // atur page disini mau muncul berapa
                 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
                 $totalFiles = count($files);
                 $totalPages = ceil($totalFiles / $filesPerPage);
@@ -857,13 +1019,18 @@ document.addEventListener("DOMContentLoaded", function () {
                         echo "<td>$fileDate</td>";
                         echo "<td>Folder</td>";
                         echo "<td class='grey-text'>$fileSize</td>";
+                        echo "<td><button class='bookmark-btn' data-path='" . htmlspecialchars($filePath, ENT_QUOTES, 'UTF-8') . "' style='background-color: #ffc107; color: #000; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer;'>Bookmark</button></td>";
+                        echo "<td><button class='delete-btn' data-path='" . htmlspecialchars($filePath, ENT_QUOTES, 'UTF-8') . "' style='background-color: #ff4d4d; color: #fff; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer;'>Delete</button></td>";
                     } else {
-                        echo "<td class='file-icon'><a href='" . htmlspecialchars($filePath, ENT_QUOTES, 'UTF-8') . "' target='_blank'>" . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . "</a></td>";                        echo "<td>$fileDate</td>";
+                        echo "<td class='file-icon'><a href='" . htmlspecialchars($filePath, ENT_QUOTES, 'UTF-8') . "' target='_blank'>" . htmlspecialchars($file, ENT_QUOTES, 'UTF-8') . "</a></td>";
+                        echo "<td>$fileDate</td>";
                         echo "<td>$fileType</td>";
                         echo "<td>$fileSize</td>";
-                
+                        echo "<td><button class='bookmark-btn' data-path='" . htmlspecialchars($filePath, ENT_QUOTES, 'UTF-8') . "' style='background-color: #ffc107; color: #000; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer;'>Bookmark</button></td>";
+                        echo "<td><button class='delete-btn' data-path='" . htmlspecialchars($filePath, ENT_QUOTES, 'UTF-8') . "' style='background-color: #ff4d4d; color: #fff; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer;'>Delete</button></td>";
+                                    
                         if (isAllowedFile($filePath, $allowedExtensions)) {
-                            echo "<td><button onclick=\"openEditor('" . htmlspecialchars($filePath) . "')\" style='background-color: #007bff; color: #fff; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer;'>Edit</button></td>";
+                            echo "<td><button onclick=\"openEditor('" . htmlspecialchars($filePath, ENT_QUOTES, 'UTF-8') . "')\" style='background-color: #007bff; color: #fff; padding: 5px 10px; border: none; border-radius: 4px; cursor: pointer;'>Edit</button></td>";
                         } else {
                             echo "<td></td>";
                         }
@@ -871,6 +1038,8 @@ document.addEventListener("DOMContentLoaded", function () {
                     echo "</tr>";
                 }
                 ?>
+                <?php echo "<a href='activity.log' target='_blank' style='background-color: #007bff; color: #fff; padding: 5px 10px; border: none; border-radius: 4px; text-decoration: none;'>View Log</a>"; ?>
+                <br />
                 
                 <div class="pagination" style="text-align: center; margin-top: 20px;">
                     <?php for ($i = 1; $i <= $totalPages; $i++): ?>
@@ -905,6 +1074,83 @@ document.addEventListener("DOMContentLoaded", function () {
                 class="github-icon"><i class="fab fa-github"></i></span> Xnuvers007
         </a>
     </footer>
+    <script>
+function bookmarkFolder(folderPath) {
+    let bookmarks = JSON.parse(localStorage.getItem('bookmarks')) || [];
+    if (bookmarks.includes(folderPath)) {
+        // Jika folder sudah di-bookmark, hapus dari daftar
+        bookmarks = bookmarks.filter(bookmark => bookmark !== folderPath);
+        localStorage.setItem('bookmarks', JSON.stringify(bookmarks));
+        alert('Bookmark removed!');
+    } else {
+        // Jika folder belum di-bookmark, tambahkan ke daftar
+        bookmarks.push(folderPath);
+        localStorage.setItem('bookmarks', JSON.stringify(bookmarks));
+        alert('Folder/File bookmarked!');
+    }
+    updateBookmarkList(); // Perbarui daftar bookmark
+}
+
+function updateBookmarkList() {
+    const bookmarks = JSON.parse(localStorage.getItem('bookmarks')) || [];
+    const bookmarkList = document.getElementById('bookmarkList');
+    bookmarkList.innerHTML = ''; // Kosongkan daftar bookmark
+
+    bookmarks.forEach(folder => {
+        const li = document.createElement('li');
+        li.innerHTML = `
+            <a href="?dir=${encodeURIComponent(folder)}">${folder}</a>
+            <button onclick="bookmarkFolder('${folder}')" style="margin-left: 10px; background-color: #ff4d4d; color: #fff; border: none; border-radius: 4px; padding: 5px 10px; cursor: pointer;">Remove</button>
+        `;
+        bookmarkList.appendChild(li);
+    });
+}
+
+document.addEventListener("DOMContentLoaded", function () {
+    updateBookmarkList();
+    const bookmarks = JSON.parse(localStorage.getItem('bookmarks')) || [];
+    const bookmarkList = document.getElementById('bookmarkList');
+    bookmarks.forEach(folder => {
+        const li = document.createElement('li');
+        li.innerHTML = `<a href="?dir=${encodeURIComponent(folder)}">${folder}</a>`;
+        bookmarkList.appendChild(li);
+    });
+});
+
+document.addEventListener("DOMContentLoaded", () => {
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const uploadForm = document.getElementById('uploadForm');
+    const browseButton = document.getElementById('browseButton');
+
+    dropZone.addEventListener('dragover', (event) => {
+        event.preventDefault();
+        dropZone.style.backgroundColor = '#e0e0e0';
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.style.backgroundColor = '';
+    });
+
+    dropZone.addEventListener('drop', (event) => {
+        event.preventDefault();
+        dropZone.style.backgroundColor = '';
+
+        const files = event.dataTransfer.files;
+        fileInput.files = files;
+
+        uploadForm.submit();
+    });
+
+    browseButton.addEventListener('click', () => {
+        fileInput.click();
+    });
+
+    fileInput.addEventListener('change', () => {
+        uploadForm.submit();
+    });
+});
+</script>
 </body>
 </html>
 
