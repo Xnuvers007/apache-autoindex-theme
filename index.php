@@ -1,4 +1,67 @@
 <?php
+session_start();
+
+$auth_username = 'Xnuvers007';
+$auth_password = 'Xnuvers007';
+
+if (isset($_GET['logout'])) {
+    session_destroy();
+    header("Location: " . strtok($_SERVER["REQUEST_URI"], '?'));
+    exit;
+}
+
+if (!isset($_SESSION['sudah_login']) || $_SESSION['sudah_login'] !== true) {
+    $error_msg = "";
+    
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        $input_user = $_POST['u'] ?? '';
+        $input_pass = $_POST['p'] ?? '';
+        
+        if ($input_user === $auth_username && $input_pass === $auth_password) {
+            $_SESSION['sudah_login'] = true;
+            header("Location: " . $_SERVER['REQUEST_URI']);
+            exit;
+        } else {
+            $error_msg = "Username atau Password salah!";
+        }
+    }
+
+?>
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login Area</title>
+    <style>
+        body { background-color: #1e1e1e; color: #d4d4d4; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .login-box { background: #252526; padding: 40px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.5); width: 100%; max-width: 320px; text-align: center; }
+        h2 { margin-top: 0; color: #fff; }
+        input { width: 100%; padding: 12px; margin: 10px 0; background: #333; border: 1px solid #444; color: #fff; border-radius: 4px; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: bold; margin-top: 10px; }
+        button:hover { background: #0056b3; }
+        .error { color: #ff4d4d; margin-bottom: 15px; font-size: 14px; background: rgba(255,0,0,0.1); padding: 10px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="login-box">
+        <h2>🔒 Restricted File
+            <br />
+            Username : Xnuvers007 | Password : Xnuvers007
+        </h2>
+        <?php if($error_msg): ?><div class="error"><?= $error_msg ?></div><?php endif; ?>
+        <form method="POST">
+            <input type="text" name="u" placeholder="Username" required autocomplete="off">
+            <input type="password" name="p" placeholder="Password" required autocomplete="off">
+            <button type="submit">MASUK</button>
+        </form>
+    </div>
+</body>
+</html>
+<?php
+    exit;
+}
+    
 ob_start();
 
 header('X-Frame-Options: SAMEORIGIN');
@@ -923,6 +986,7 @@ document.addEventListener("DOMContentLoaded", function () {
             <div class="button">
                 <button onclick="toggleMode()" class="toogle" type="button">Toggle Light/Dark Mode</button>
                 <button onclick="goBack()" class="toogle" type="button">Back</button>
+                <a href="?logout=true" style="background-color: #dc3545; color: #fff; padding: 8px 16px; text-decoration: none; border-radius: 4px;">Logout</a>
             </div>
         </header>
 
